@@ -10,13 +10,13 @@ from typing import List
 from typing import Union
 
 import mcp.types as types
-import psycopg
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP, Context
 from pydantic import AnyUrl
 from pydantic import Field
 
 from .artifacts import ErrorResult
 from .artifacts import ExplainPlanArtifact
+from .context import get_from_context, server_lifespan
 from .database_health import DatabaseHealthTool
 from .database_health import HealthType
 from .dta import MAX_NUM_DTA_QUERIES_LIMIT
@@ -28,7 +28,8 @@ from .sql import SqlDriver
 from .sql import check_hypopg_installation_status
 from .sql import obfuscate_password
 
-mcp = FastMCP("postgres-mcp")
+# Initialize MCP with lifespan support
+mcp = FastMCP("postgres-mcp", lifespan=server_lifespan)
 
 # Constants
 PG_STAT_STATEMENTS = "pg_stat_statements"
@@ -38,18 +39,14 @@ ResponseType = List[types.TextContent | types.ImageContent | types.EmbeddedResou
 
 logger = logging.getLogger(__name__)
 
-
 class AccessMode(str, Enum):
     """SQL access modes for the server."""
-
     UNRESTRICTED = "unrestricted"  # Unrestricted access
     RESTRICTED = "restricted"  # Read-only with safety features
-
 
 # Global variables
 db_connection = DbConnPool()
 current_access_mode = AccessMode.UNRESTRICTED
-
 
 async def get_sql_driver() -> Union[SqlDriver, SafeSqlDriver]:
     """Get the appropriate SQL driver based on the current access mode."""
@@ -62,114 +59,47 @@ async def get_sql_driver() -> Union[SqlDriver, SafeSqlDriver]:
         logger.debug("Using unrestricted SqlDriver (UNRESTRICTED mode)")
         return base_driver
 
-
 def format_text_response(text: Any) -> ResponseType:
     """Format a text response."""
     return [types.TextContent(type="text", text=str(text))]
-
 
 def format_error_response(error: str) -> ResponseType:
     """Format an error response."""
     return format_text_response(f"Error: {error}")
 
 
-@mcp.resource(
-    name="list_resources",
-    uri="postgres-mcp://resources",
-    description="List available resources, such as database tables and extensions",
+
+
+
+@mcp.tool(
+    description="Get plan to perform an database analysis or task. Follow the plan step by step."
 )
-async def list_resources() -> list[types.Resource]:
-    """List available database tables as resources."""
-    try:
-        sql_driver = await get_sql_driver()
-        rows = await sql_driver.execute_query("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
-        tables = [row.cells["table_name"] for row in rows] if rows else []
-
-        base_url = "postgres-mcp://"
-
-        resources = [
-            types.Resource(
-                uri=AnyUrl(f"{base_url}/{table}/schema"),
-                name=f'"{table}" database schema',
-                description=f"Schema for table {table}",
-                mimeType="application/json",
-            )
-            for table in tables
-        ]
-
-        extensions_uri = AnyUrl(f"{base_url}/extensions")
-        resources.append(
-            types.Resource(
-                uri=extensions_uri,
-                name="Installed PostgreSQL Extensions",
-                description="List of installed PostgreSQL extensions in the current database.",
-                mimeType="application/json",
-            )
-        )
-
-        return resources
-    except Exception as e:
-        logger.error(f"Error listing resources: {e}")
-        raise
-
-
-@mcp.resource(
-    name="list_extensions",
-    uri="postgres-mcp://extensions",
-    description="List available and installed extensions",
-)
-async def extensions_resource() -> str:
-    """Get information about installed PostgreSQL extensions."""
-    try:
-        sql_driver = await get_sql_driver()
-        rows = await sql_driver.execute_query(
-            """
-            SELECT
-                pae.name AS extname,
-                CASE WHEN pe.extversion IS NOT NULL THEN true ELSE false END AS installed,
-                pe.extversion AS installed_version,
-                pae.default_version,
-                pae.comment
-            FROM
-                pg_available_extensions pae
-            LEFT JOIN
-                pg_extension pe
-                ON pae.name = pe.extname
-            ORDER BY
-                pae.name;
-            """
-        )
-        extensions = [row.cells for row in rows] if rows else []
-        return str(extensions)
-    except Exception as e:
-        logger.error(f"Error listing extensions: {e}")
-        raise
-
-
-@mcp.resource(
-    name="list_table_columns",
-    uri="postgres-mcp://{table_name}/schema",
-    description="Show columns for the table",
-)
-async def table_schema_resource(table_name: str) -> str:
-    """Get schema information for a specific table."""
-    try:
-        sql_driver = await get_sql_driver()
-        rows = await SafeSqlDriver.execute_param_query(
-            sql_driver,
-            """
-            SELECT column_name, data_type
-            FROM information_schema.columns
-            WHERE table_name = {}
-            """,
-            [table_name],
-        )
-        columns = [row.cells for row in rows] if rows else []
-        return str(columns)
-    except Exception as e:
-        logger.error(f"Error getting table schema: {e}")
-        raise
-
+async def get_analysis_plan(
+    task: str = Field(
+        description=("The type of analysis/task. Valid values are: \n"
+                     "- 'slow queries' if user wants to look at slow queries"),
+    ),
+    ctx: Context = None, # type: ignore
+) -> ResponseType:
+    """Get step by step plan to perform an database analysis or task."""
+    plan = []
+    if task == "slow queries":
+        installed_extensions = await get_from_context(ctx, "extensions")
+        print(f"Installed extensions: {installed_extensions}")
+        logger.info(f"Installed extensions: {installed_extensions}")
+        await ctx.info(f"Installed extensions: {installed_extensions}")
+        if not installed_extensions or "pg_stat_statements" not in installed_extensions:
+            plan.append("Install the pg_stat_statements extension.  It is not installed.")
+        plan.append("Get the slowest queries by mean time and include query id, full query text, calls, total time, mean time, and rows.")
+        plan.append("Include analysis of shared and local blocks hit ratios and outliers in terms of stdev if relevant.")
+    
+    if plan:
+        # format plan as a numbered list
+        output = f"Follow this plan step by step:\n" + "\n".join([f"{i+1}. {step}\n" for i, step in enumerate(plan)])
+        return format_text_response(output)
+    else:
+        return format_error_response(f"'{task}' is not supported by this tool")
+        
 
 @mcp.tool(description="Explains the execution plan for a SQL query, showing how the database will execute it and provides detailed cost estimates.")
 async def explain_query(
@@ -248,12 +178,11 @@ Examples: [
         logger.error(f"Error explaining query: {e}")
         return format_error_response(str(e))
 
-
-@mcp.tool(description="Run a read-only SQL query")
+@mcp.tool(description="Run a SQL query. If the query can make changes, first cconfirm the action with the user.")
 async def query(
     sql: str = Field(description="SQL to run", default="all"),
 ) -> ResponseType:
-    """Run a read-only SQL query."""
+    """Run a SQL query."""
     try:
         sql_driver = await get_sql_driver()
         rows = await sql_driver.execute_query(sql)  # type: ignore
@@ -263,7 +192,6 @@ async def query(
     except Exception as e:
         logger.error(f"Error executing query: {e}")
         return format_error_response(str(e))
-
 
 @mcp.tool(description="Analyze frequently executed queries in the database and recommend optimal indexes")
 async def analyze_workload(
@@ -278,7 +206,6 @@ async def analyze_workload(
     except Exception as e:
         logger.error(f"Error analyzing workload: {e}")
         return format_error_response(str(e))
-
 
 @mcp.tool(description="Analyze a list of (up to 10) SQL queries and recommend optimal indexes")
 async def analyze_queries(
@@ -300,7 +227,6 @@ async def analyze_queries(
         logger.error(f"Error analyzing queries: {e}")
         return format_error_response(str(e))
 
-
 @mcp.tool(
     description="Analyzes database health for specified components including buffer cache hit rates, "
     "identifies duplicate, unused, or invalid indexes, sequence health, constraint health "
@@ -321,133 +247,6 @@ async def database_health(
     health_tool = DatabaseHealthTool(await get_sql_driver())
     result = await health_tool.health(health_type=health_type)
     return format_text_response(result)
-
-
-@mcp.tool(description="Lists all extensions currently installed in the PostgreSQL database.")
-async def list_installed_extensions(ctx) -> ResponseType:
-    """Lists all extensions currently installed in the PostgreSQL database."""
-    try:
-        extensions = await ctx.read_resource("postgres-mcp://extensions")
-        result_text = f"Installed PostgreSQL Extensions:\n{extensions}"
-        return format_text_response(result_text)
-    except Exception as e:
-        logger.error(f"Error listing installed extensions: {e}")
-        return format_error_response(str(e))
-
-
-@mcp.tool(
-    description="Installs a PostgreSQL extension if it's available but not already installed. "
-    "Requires appropriate database privileges (often superuser)."
-)
-async def install_extension(
-    extension_name: str = Field(description="Extension to install. e.g. pg_stat_statements"),
-) -> ResponseType:
-    """Installs a PostgreSQL extension if it's available but not already installed. Requires appropriate database privileges (often superuser)."""
-
-    try:
-        # First check if the extension exists in pg_available_extensions
-        sql_driver = await get_sql_driver()
-        check_rows = await SafeSqlDriver.execute_param_query(
-            sql_driver,
-            "SELECT name, default_version FROM pg_available_extensions WHERE name = {}",
-            [extension_name],
-        )
-
-        if not check_rows:
-            return format_text_response(
-                f"Error: Extension '{extension_name}' is not available in the PostgreSQL installation. "
-                "Please check if the extension is properly installed on the server."
-            )
-
-        # Check if extension is already installed
-        installed_rows = await SafeSqlDriver.execute_param_query(
-            sql_driver,
-            "SELECT extversion FROM pg_extension WHERE extname = {}",
-            [extension_name],
-        )
-
-        if installed_rows:
-            return format_text_response(f"Extension '{extension_name}' version {installed_rows[0].cells['extversion']} is already installed.")
-
-        # Attempt to create the extension
-        await sql_driver.execute_query(
-            f"CREATE EXTENSION {extension_name}",  # type: ignore
-            # NOTE: cannot escape because an escaped extension_name is invalid SQL
-            force_readonly=False,
-        )
-
-        return format_text_response(
-            f"Successfully installed '{extension_name}' extension.",
-        )
-    except psycopg.OperationalError as e:
-        error_msg = (
-            f"Error installing '{extension_name}': {e}\n\n"
-            "This is likely due to insufficient permissions. The following are common causes:\n"
-            "1. The database user lacks superuser privileges\n"
-            "2. The extension is not available in the PostgreSQL installation\n"
-            "3. The extension requires additional system-level dependencies\n\n"
-            "Please ensure you have the necessary permissions and the extension is available on your PostgreSQL server."
-        )
-        return format_error_response(error_msg)
-    except Exception as e:
-        error_msg = f"Unexpected error installing '{extension_name}': {e}\n\nPlease check the error message and ensure all prerequisites are met."
-        return format_error_response(error_msg)
-
-
-@mcp.tool(
-    description=f"Reports the slowest SQL queries based on total execution time, using data from the '{PG_STAT_STATEMENTS}' extension. "
-    "If the extension is not installed, provides instructions on how to install it."
-)
-async def top_slow_queries(
-    limit: int = Field(description="Number of slow queries to return", default=10),
-) -> ResponseType:
-    """Reports the slowest SQL queries based on total execution time."""
-    try:
-        sql_driver = await get_sql_driver()
-
-        rows = await SafeSqlDriver.execute_param_query(
-            sql_driver,
-            "SELECT 1 FROM pg_extension WHERE extname = {}",
-            [PG_STAT_STATEMENTS],
-        )
-        extension_exists = len(rows) > 0 if rows else False
-
-        if extension_exists:
-            query = """
-                SELECT
-                    query,
-                    calls,
-                    total_exec_time,
-                    mean_exec_time,
-                    rows
-                FROM pg_stat_statements
-                ORDER BY total_exec_time DESC
-                LIMIT {};
-            """
-            slow_query_rows = await SafeSqlDriver.execute_param_query(
-                sql_driver,
-                query,
-                [limit],
-            )
-            slow_queries = [row.cells for row in slow_query_rows] if slow_query_rows else []
-            result_text = f"Top {len(slow_queries)} slowest queries by total execution time:\n"
-            result_text += str(slow_queries)
-            return format_text_response(result_text)
-        else:
-            message = (
-                f"The '{PG_STAT_STATEMENTS}' extension is required to report slow queries, but it is not currently installed.\n\n"
-                f"You can ask me to install 'pg_stat_statements' using the 'install_extension' tool.\n\n"
-                f"**Is it safe?** Installing '{PG_STAT_STATEMENTS}' is generally safe and a standard practice for performance monitoring. "
-                f"It adds performance overhead by tracking statistics, but this is usually negligible unless your server is under extreme load. "
-                f"It requires database privileges (often superuser) to install.\n\n"
-                f"**What does it do?** It records statistics (like execution time, number of calls, rows returned) "
-                f"for every query executed against the database.\n\n"
-                f"**How to undo?** If you later decide to remove it, you can ask me to run 'DROP EXTENSION {PG_STAT_STATEMENTS};'."
-            )
-            return format_text_response(message)
-    except Exception as e:
-        logger.error(f"Error getting slow queries: {e}")
-        return format_error_response(str(e))
 
 
 async def main():
@@ -504,7 +303,6 @@ async def main():
         # Close the connection pool when exiting
         await shutdown()
 
-
 async def shutdown(sig=None):
     """Clean shutdown of the server."""
     if sig:
@@ -523,7 +321,6 @@ async def shutdown(sig=None):
         logger.warning(f"Error during shutdown: {e}")
 
     logger.info("Shutdown complete.")
-
 
 if __name__ == "__main__":
     asyncio.run(main())
