@@ -701,3 +701,643 @@ To run these demos effectively, you can use these sample databases:
 3. **Use real-world queries**: Use realistic queries that demonstrate complex relationships and calculations
 4. **Prepare failure cases**: Show how the system handles errors and edge cases
 5. **Demonstrate progressive optimization**: Show how incremental improvements can significantly boost performance 
+
+## Advanced Multi-Step Demo Scenarios
+
+The following scenarios demonstrate more comprehensive, real-world uses of Postgres Pro MCP that involve multiple interactions and progressive problem-solving approaches.
+
+## Advanced Demo 1: E-commerce Performance Optimization Journey
+
+### Scenario
+You're the lead developer at a growing e-commerce site experiencing periodic slowdowns during peak hours. Customer complaints are increasing, and the marketing team plans a major promotion next week that will significantly increase traffic.
+
+### Multi-step Interaction Flow
+
+#### Step 1: Initial Assessment
+
+**User:** "Our e-commerce site has been slowing down, especially during peak hours. We've got a major sales event next week and need to make sure the database can handle the load."
+
+**Assistant:**
+"I'll help you optimize your database for the upcoming sales event. Let's start with a comprehensive health check to establish baseline metrics and identify any immediate issues."
+
+*The assistant runs:*
+```
+analyze_db_health with all components
+```
+
+"I've analyzed your database health and found several issues that could be affecting performance:
+
+1. Your buffer cache hit rate is 82%, which is below the recommended 99%
+2. I've identified 3 unused indexes consuming 4.2GB of storage
+3. Several tables haven't been vacuumed in over 30 days
+4. The 'orders' table appears to be bloated (43% bloat ratio)
+
+Let's examine your slow queries before making optimization recommendations."
+
+#### Step 2: Workload Analysis
+
+*The assistant runs:*
+```
+get_top_queries
+analyze_workload_indexes
+```
+
+"Looking at your query patterns, I see that:
+
+1. The product search query accounts for 42% of your database load:
+   ```sql
+   SELECT p.*, c.category_name 
+   FROM products p 
+   JOIN categories c ON p.category_id = c.id 
+   WHERE p.is_available = true 
+   AND (p.name ILIKE $1 OR p.description ILIKE $1) 
+   ORDER BY p.popularity_score DESC LIMIT 20;
+   ```
+
+2. Order history lookups are taking 2.3 seconds on average:
+   ```sql
+   SELECT o.*, ol.*, p.name, p.image_url
+   FROM orders o
+   JOIN order_lines ol ON o.id = ol.order_id
+   JOIN products p ON ol.product_id = p.id
+   WHERE o.customer_id = $1
+   ORDER BY o.created_at DESC
+   LIMIT 10;
+   ```
+
+3. Your checkout process involves 12 separate queries, several of which could be optimized
+
+Based on the workload analysis, I recommend these specific optimizations:
+
+1. Create a partial index for product searches
+2. Add a covering index for order history
+3. Drop the 3 unused indexes I identified
+4. Run VACUUM FULL on the bloated orders table
+5. Add an index on customer_id + created_at for the orders table"
+
+**User:** "Can you explain how these changes will improve our product search specifically? That's the most critical part of our application."
+
+#### Step 3: Testing Hypothetical Indexes
+
+*The assistant runs:*
+```
+explain_query with hypothetical indexes for the product search query
+```
+
+"I've simulated several index combinations for your product search query. Here's what I found:
+
+**Current execution plan (cost: 15403.28, estimated time: 570ms):**
+- Performs a bitmap heap scan on products
+- Uses a sequential scan on categories
+- Uses a nested loop join
+
+**With a multicolumn index on (is_available, popularity_score) including name, description:**
+```sql
+CREATE INDEX idx_product_search ON products (is_available, popularity_score DESC) 
+INCLUDE (name, description, category_id);
+```
+
+This would reduce the query cost by 93% to 1078.42 (estimated time: ~40ms) by:
+- Enabling an index-only scan instead of bitmap scan
+- Eliminating the need for sorting (ORDER BY)
+- Reducing the amount of data read from disk
+
+This is the optimal index configuration for this specific query pattern. Would you like me to implement this change or simulate any other indexes?"
+
+**User:** "That sounds promising. Let's implement those changes and verify the improvements."
+
+#### Step 4: Implementing and Verifying Changes
+
+*The assistant provides SQL statements for each change:*
+```sql
+-- Create optimal product search index
+CREATE INDEX idx_product_search ON products (is_available, popularity_score DESC) 
+INCLUDE (name, description, category_id);
+
+-- Add covering index for order history
+CREATE INDEX idx_orders_customer_history ON orders (customer_id, created_at DESC);
+
+-- Drop unused indexes
+DROP INDEX idx_products_price;
+DROP INDEX idx_order_update_time;
+DROP INDEX idx_rarely_used_column;
+
+-- Run VACUUM FULL on bloated table
+VACUUM FULL orders;
+
+-- Adjust configuration (if you have server access)
+ALTER SYSTEM SET shared_buffers = '2GB';
+ALTER SYSTEM SET work_mem = '16MB';
+```
+
+*After implementation, the assistant verifies:*
+```
+explain_query for the product search with the new index
+get_top_queries to confirm improvements
+```
+
+"I've verified the improvements:
+
+1. The product search query is now running 14x faster, down from 570ms to 41ms
+2. Order history lookups improved from 2.3s to 320ms
+3. Overall database load has decreased by approximately 35%
+4. We've reclaimed 4.2GB of storage by removing unused indexes
+5. Buffer cache hit rate has improved to 96% after configuration changes
+
+These optimizations should provide significant headroom for your upcoming sales event."
+
+#### Step 5: Load Testing Simulation
+
+**User:** "How can we verify the database will handle our projected load for the sales event?"
+
+**Assistant:**
+"To verify your database will handle the increased load, I recommend simulating your peak traffic patterns. Here's how we can set up a test:
+
+1. First, create a custom pgbench script that mirrors your actual workload:
+
+```sql
+-- Save as custom_workload.sql
+\set customer_id random(1, 10000)
+\set search_term 'product' || random(1, 100)
+\set product_id random(1, 5000)
+
+BEGIN;
+-- Product search (most common operation)
+SELECT p.*, c.category_name 
+FROM products p 
+JOIN categories c ON p.category_id = c.id 
+WHERE p.is_available = true 
+AND (p.name ILIKE '%' || :search_term || '%') 
+ORDER BY p.popularity_score DESC LIMIT 20;
+
+-- View product details
+SELECT * FROM products WHERE id = :product_id;
+
+-- Customer order history (less frequent)
+SELECT o.*, ol.*, p.name, p.image_url
+FROM orders o
+JOIN order_lines ol ON o.id = ol.order_id
+JOIN products p ON ol.product_id = p.id
+WHERE o.customer_id = :customer_id
+ORDER BY o.created_at DESC
+LIMIT 10;
+COMMIT;
+```
+
+2. Run the load test with your projected traffic (for example, 5x current load):
+
+```bash
+pgbench -h localhost -U username -d dbname -f custom_workload.sql -c 50 -j 4 -T 300
+```
+
+This simulates 50 concurrent connections running your custom workload for 5 minutes.
+
+3. During the test, monitor these key metrics:
+   - Transaction throughput (TPS)
+   - Average latency
+   - 95th percentile latency
+   - Connection utilization
+   - CPU and memory usage
+
+With these optimizations implemented, you should be able to handle the increased load for your sales event. The load test will confirm this and identify any remaining bottlenecks."
+
+### Expected Results
+
+After completing this multi-step optimization process, you should achieve:
+
+- 80-95% reduction in query execution time for critical queries
+- 30-50% overall reduction in database load
+- Significantly improved buffer cache utilization
+- Confidence in the database's ability to handle peak traffic
+- Elimination of unused or redundant database objects
+
+## Advanced Demo 2: Data Warehouse Query Optimization
+
+### Scenario
+You're managing a data warehouse that analysts use for business intelligence. Reports that were fast with smaller data volumes now take hours to complete after a year of data collection. Your analytics team needs these reports to run much faster to support weekly instead of quarterly business reviews.
+
+### Multi-Step Interactions
+
+#### Step 1: Problem Assessment
+
+**User:** "Our quarterly sales report query used to take 5 minutes but now runs for over 3 hours. We need to generate these reports weekly instead of quarterly, so this performance is unacceptable."
+
+**Assistant:**
+"I'll help you optimize your data warehouse queries. Can you share the problematic query so I can analyze it?"
+
+**User:**
+```sql
+SELECT 
+  date_trunc('month', o.order_date) as month,
+  c.category_name,
+  r.region_name,
+  SUM(ol.quantity) as units_sold,
+  SUM(ol.quantity * ol.unit_price) as revenue,
+  COUNT(DISTINCT o.customer_id) as unique_customers
+FROM orders o
+JOIN order_lines ol ON o.id = ol.order_id
+JOIN products p ON ol.product_id = p.id
+JOIN categories c ON p.category_id = c.id
+JOIN customers cust ON o.customer_id = cust.id
+JOIN regions r ON cust.region_id = r.id
+WHERE o.order_date >= '2022-01-01'
+  AND o.status = 'completed'
+GROUP BY 1, 2, 3
+ORDER BY 1, 3, 2;
+```
+
+#### Step 2: Schema and Data Volume Analysis
+
+*The assistant examines the schema and data volumes:*
+```
+list_schemas
+list_objects in public schema
+get_object_details for tables: orders, order_lines, products, categories, customers, regions
+```
+
+"I've analyzed your schema and found:
+
+1. The `orders` table has 8.5 million rows (245GB)
+2. The `order_lines` table has 42 million rows (512GB)
+3. The `products` table has 250,000 rows
+4. Your tables are not partitioned by date
+5. There's no index on orders.order_date which is causing a sequential scan
+6. The query involves 5 joins without optimal join indexes
+
+These factors explain why your query performance has degraded as data volumes increased."
+
+#### Step 3: Query Plan Analysis
+
+*The assistant runs:*
+```
+explain_query with ANALYZE for the report query
+```
+
+"The execution plan reveals several bottlenecks:
+
+1. **Sequential scan on orders table** (245GB) - Cost: 1,245,832.45, actual time: 1532.4ms
+2. **Hash join between orders and order_lines** - Cost: 3,852,421.12, actual time: 5284.7ms
+3. **Sort operation for GROUP BY** - Cost: 854,372.18, actual time: 3842.5ms
+4. **Additional nested loop joins** with smaller tables - Cost: 452,471.85, actual time: 2143.2ms
+
+The total execution time is 186 minutes, with most time spent on disk I/O and sorting operations. Let's implement a series of optimizations to address each bottleneck."
+
+#### Step 4: Progressive Optimization
+
+**Assistant:** "I recommend a progressive optimization approach where we implement changes in stages and measure the improvement at each step."
+
+##### Stage 1: Basic Indexing
+
+*Assistant provides SQL for initial improvements:*
+```sql
+-- Add index for the WHERE clause
+CREATE INDEX idx_orders_date_status ON orders (order_date, status);
+
+-- Add index for the GROUP BY
+CREATE INDEX idx_orderlines_order_id ON order_lines (order_id);
+```
+
+"After implementing these basic indexes, the query execution time reduced from 186 minutes to 78 minutes - a 58% improvement, but still not enough."
+
+##### Stage 2: Materialized View Creation
+
+```sql
+-- Create a materialized view for monthly sales aggregations
+CREATE MATERIALIZED VIEW mv_monthly_sales AS
+SELECT 
+  date_trunc('month', o.order_date) as month,
+  p.category_id,
+  cust.region_id,
+  SUM(ol.quantity) as units_sold,
+  SUM(ol.quantity * ol.unit_price) as revenue,
+  COUNT(DISTINCT o.customer_id) as unique_customers
+FROM orders o
+JOIN order_lines ol ON o.id = ol.order_id
+JOIN products p ON ol.product_id = p.id
+JOIN customers cust ON o.customer_id = cust.id
+WHERE o.order_date >= '2022-01-01'
+  AND o.status = 'completed'
+GROUP BY 1, 2, 3;
+
+-- Add indexes to the materialized view
+CREATE INDEX idx_mv_monthly_sales_month ON mv_monthly_sales(month);
+CREATE INDEX idx_mv_monthly_sales_category ON mv_monthly_sales(category_id);
+CREATE INDEX idx_mv_monthly_sales_region ON mv_monthly_sales(region_id);
+
+-- Create a refresh function
+CREATE OR REPLACE FUNCTION refresh_sales_mv()
+RETURNS void AS $$
+BEGIN
+  REFRESH MATERIALIZED VIEW mv_monthly_sales;
+END
+$$ LANGUAGE plpgsql;
+```
+
+"Now let's rewrite the query to use the materialized view:"
+
+```sql
+SELECT 
+  mv.month,
+  c.category_name,
+  r.region_name,
+  SUM(mv.units_sold) as units_sold,
+  SUM(mv.revenue) as revenue,
+  SUM(mv.unique_customers) as unique_customers
+FROM mv_monthly_sales mv
+JOIN categories c ON mv.category_id = c.id
+JOIN regions r ON mv.region_id = r.id
+GROUP BY 1, 2, 3
+ORDER BY 1, 3, 2;
+```
+
+"This rewritten query now executes in 12 seconds - a 930x improvement over the original 3-hour runtime."
+
+##### Stage 3: Table Partitioning Strategy
+
+"For a long-term solution, I recommend implementing table partitioning on your orders table by date range:"
+
+```sql
+-- Create partitioned orders table
+CREATE TABLE orders_partitioned (
+  -- Same schema as original orders table
+) PARTITION BY RANGE (order_date);
+
+-- Create partitions by quarter
+CREATE TABLE orders_y2022q1 PARTITION OF orders_partitioned
+  FOR VALUES FROM ('2022-01-01') TO ('2022-04-01');
+  
+CREATE TABLE orders_y2022q2 PARTITION OF orders_partitioned
+  FOR VALUES FROM ('2022-04-01') TO ('2022-07-01');
+  
+-- Add additional partitions as needed
+-- ...
+
+-- Create similar partitioning for order_lines if needed
+```
+
+"Partitioning would give you additional benefits:
+1. More efficient pruning of irrelevant data
+2. Faster vacuum and maintenance operations
+3. Ability to archive older partitions to lower-cost storage
+4. Improved query planning"
+
+#### Step 5: Maintenance and Automation
+
+"To maintain optimal performance as your data continues to grow:
+
+1. Schedule regular refreshes of the materialized view:
+   ```sql
+   -- Add to crontab or pg_cron
+   SELECT refresh_sales_mv();
+   ```
+
+2. Automate the creation of new partitions as needed
+
+3. Set up a monitoring query to track the execution time trends:
+   ```sql
+   SELECT query, calls, mean_exec_time, total_exec_time
+   FROM pg_stat_statements
+   WHERE query ILIKE '%category%region%revenue%'
+   ORDER BY total_exec_time DESC
+   LIMIT 10;
+   ```
+
+4. Schedule statistics updates for optimal query planning:
+   ```sql
+   ANALYZE mv_monthly_sales;
+   ```
+
+With these optimizations in place, your reports will complete in seconds instead of hours, enabling weekly business reviews."
+
+### Expected Results
+
+After completing this data warehouse optimization:
+- Query execution time reduced from 3+ hours to seconds
+- Automated maintenance ensures consistent performance
+- Data growth is managed through partitioning
+- Analysts can run reports on demand rather than scheduling them overnight
+
+## Advanced Demo 3: Database Migration Validation
+
+### Scenario
+You're migrating from a legacy database to a new PostgreSQL instance. You need to verify data integrity, optimize for the new workload, and ensure performance meets expectations.
+
+### Multi-Step Interactions
+
+#### Step 1: Initial Assessment
+
+**User:** "We've just migrated our application database from MySQL to PostgreSQL. I need to validate the migration, ensure data integrity, and optimize for our workload patterns. Can you help?"
+
+**Assistant:**
+"I'll help you validate your migration and optimize your new PostgreSQL database. Let's start with a systematic assessment of the new database structure and health."
+
+*The assistant runs:*
+```
+list_schemas
+list_objects in public schema
+analyze_db_health
+```
+
+"I've completed an initial assessment of your PostgreSQL database:
+
+1. Schema structure: 42 tables, 18 views, 87 indexes, 6 triggers
+2. Database health findings:
+   - Missing primary keys on 3 tables
+   - Foreign key constraints without indexes: 8
+   - No indexes on frequently queried timestamp columns
+   - Several tables missing ANALYZE statistics
+   - No extensions currently installed
+
+Let's continue with more detailed validation checks."
+
+#### Step 2: Data Integrity Validation
+
+**User:** "What checks should we run to ensure all data migrated correctly?"
+
+**Assistant:**
+"To validate data integrity after migration, let's run these checks:
+
+1. **Row count validation for all tables:**
+```sql
+-- Save this as rowcount_validation.sql
+SELECT 'SELECT ''' || table_name || ''', COUNT(*) FROM ' || table_name || ';'
+FROM information_schema.tables 
+WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+ORDER BY table_name;
+```
+
+2. **Primary key uniqueness check:**
+```sql
+-- For each table with a primary key
+SELECT COUNT(*) as total_rows, COUNT(DISTINCT id) as unique_ids
+FROM users;
+-- Repeat for all tables with primary keys
+```
+
+3. **Foreign key validation:**
+```sql
+-- Example for order_items table
+SELECT COUNT(*) 
+FROM order_items oi 
+LEFT JOIN orders o ON oi.order_id = o.id
+WHERE o.id IS NULL;
+```
+
+4. **Data type conversion issues check:**
+```sql
+-- Check for truncated values in text fields
+SELECT COUNT(*) FROM products WHERE LENGTH(description) = 255;
+```
+
+5. **Statistical distribution comparison:**
+```sql
+-- Check value distributions match expected patterns
+SELECT 
+  MIN(amount), MAX(amount), AVG(amount), 
+  PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY amount) as median
+FROM transactions;
+```
+
+Would you like me to implement any of these checks now?"
+
+**User:** "Let's run the row count validation first and then check for foreign key issues."
+
+*The assistant runs the row count validation and foreign key checks*
+
+"I've found several integrity issues:
+
+1. The `order_lines` table has 3,842 orphaned records with no matching order_id
+2. The `customer_addresses` table has 275 fewer rows than expected
+3. The `product_attributes` table has duplicate entries for some products
+
+These need to be addressed before proceeding with optimization."
+
+#### Step 3: Index and Query Optimization
+
+**User:** "We've fixed those data issues. Now let's focus on optimizing the database for our workload."
+
+*The assistant runs:*
+```
+get_top_queries
+analyze_workload_indexes
+```
+
+"Based on your query patterns, I've identified these optimization opportunities:
+
+1. **Missing indexes on foreign keys:**
+```sql
+CREATE INDEX idx_order_lines_order_id ON order_lines(order_id);
+CREATE INDEX idx_order_lines_product_id ON order_lines(product_id);
+CREATE INDEX idx_transactions_customer_id ON transactions(customer_id);
+```
+
+2. **Timestamp query optimization:**
+```sql
+CREATE INDEX idx_orders_created_at ON orders(created_at);
+CREATE INDEX idx_user_events_timestamp ON user_events(event_timestamp);
+```
+
+3. **Text search improvements:**
+```sql
+-- For product search functionality
+CREATE INDEX idx_products_name_gin ON products USING gin(name gin_trgm_ops);
+CREATE EXTENSION pg_trgm;
+```
+
+4. **Missing primary keys:**
+```sql
+ALTER TABLE log_entries ADD PRIMARY KEY (id);
+ALTER TABLE temporary_uploads ADD PRIMARY KEY (id);
+```
+
+5. **Query rewriting opportunities:**
+Several queries are using `COUNT(*)` over entire tables which can be optimized by using smaller indexed columns.
+
+Would you like me to implement these optimizations?"
+
+#### Step 4: Configuration Tuning
+
+**User:** "Yes, please implement those index changes. What about PostgreSQL-specific configuration tuning we should consider?"
+
+**Assistant:**
+"Now let's tune your PostgreSQL configuration to match your workload characteristics:
+
+1. **Memory configuration:**
+```sql
+-- Check current settings
+SHOW shared_buffers;
+SHOW work_mem;
+SHOW maintenance_work_mem;
+SHOW effective_cache_size;
+```
+
+Given your server has 32GB RAM and this is a dedicated database server, I recommend:
+
+```
+shared_buffers = 8GB         # 25% of RAM
+work_mem = 64MB              # Higher for complex sorts and joins
+maintenance_work_mem = 512MB # Higher for VACUUM operations
+effective_cache_size = 24GB  # 75% of RAM
+```
+
+2. **Write performance:**
+```
+wal_buffers = 16MB           # Helps with write-heavy workloads
+checkpoint_completion_target = 0.9  # Spreads out checkpoint writes
+```
+
+3. **Query planning:**
+```
+random_page_cost = 1.1       # For SSD storage
+effective_io_concurrency = 200  # For SSD storage
+```
+
+4. **Autovacuum tuning:**
+```
+autovacuum_vacuum_scale_factor = 0.05  # More aggressive vacuuming
+autovacuum_analyze_scale_factor = 0.02  # More frequent statistics updates
+```
+
+These settings should be added to your postgresql.conf file."
+
+#### Step 5: Migration-Specific Optimizations
+
+**User:** "Are there any MySQL-to-PostgreSQL specific optimizations we should consider?"
+
+**Assistant:**
+"Yes, there are several MySQL-to-PostgreSQL migration-specific optimizations:
+
+1. **Update application query patterns:**
+   - Replace `LIMIT x,y` with PostgreSQL's `OFFSET x LIMIT y`
+   - Replace `IF()` with `CASE WHEN` expressions
+   - Update `GROUP_CONCAT()` functions with PostgreSQL's `string_agg()`
+
+2. **Review and update data types:**
+   - Replace `UNSIGNED` integer types with appropriate PostgreSQL types
+   - Migrate `ENUM` types to PostgreSQL's native ENUM type or CHECK constraints
+   - Update any `DATETIME` fields to use PostgreSQL's richer timestamp types
+
+3. **Indexing differences:**
+   - MySQL's implicit primary key indexes vs. PostgreSQL's explicit indexing
+   - Consider using PostgreSQL-specific index types (GIN, BRIN, etc.) where appropriate
+
+4. **Transaction isolation:**
+   - MySQL's default isolation level (REPEATABLE READ) vs. PostgreSQL's default (READ COMMITTED)
+   - Review transaction boundaries in your application code
+
+5. **Text search functionality:**
+   - Migrate from MySQL's fulltext search to PostgreSQL's more powerful full-text search
+   ```sql
+   CREATE INDEX idx_product_search ON products USING gin(to_tsvector('english', name || ' ' || description));
+   ```
+
+Would you like me to elaborate on any of these areas?"
+
+### Expected Results
+
+After completing this migration validation and optimization process:
+- Verified data integrity with no loss during migration
+- Optimized schema and indexes for PostgreSQL
+- Configured server parameters for your specific workload
+- Updated queries to leverage PostgreSQL-specific features
+- Performance equal to or better than the original MySQL database
