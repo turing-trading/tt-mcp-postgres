@@ -28,6 +28,10 @@ psql datawarehouse_optimization -f advanced_demo2_setup.sql
 # Create Database Migration Validation demo database
 createdb migration_validation
 psql migration_validation -f advanced_demo3_setup.sql
+
+# Create Time-Series Data Management demo database
+createdb timeseries_iot_demo
+psql timeseries_iot_demo -f advanced_demo4_setup.sql
 ```
 
 ### 2. Resource considerations
@@ -42,6 +46,7 @@ Each database requires significant resources:
 - **E-commerce demo**: ~5GB disk space, 2GB+ RAM
 - **Data warehouse demo**: ~8GB disk space, 4GB+ RAM
 - **Migration validation demo**: ~2GB disk space, 1GB+ RAM
+- **Time-series IoT demo**: ~3GB disk space, 2GB+ RAM
 
 If you are running on a system with limited resources, you can modify the scripts to reduce the data volume by changing the number of rows generated in the `generate_series()` calls.
 
@@ -88,6 +93,22 @@ Use this to demonstrate:
 - Schema structure improvements
 - Performance optimization techniques specific to migrated databases
 
+#### Advanced Demo 4: Time-Series Data Management
+
+The time-series demo creates a database for IoT sensor data with:
+- High-frequency sensor readings with timestamps
+- TimescaleDB hypertable optimizations for time-series data
+- Efficient vs. inefficient time-series query patterns
+- Anomaly detection patterns
+- Data retention and compression policies
+
+Use this to demonstrate:
+- Time-series specific optimizations with TimescaleDB integration
+- Time-based partitioning and compression strategies
+- Real-time analytics with continuous aggregates
+- Statistical anomaly detection
+- Efficient downsampling and rollup strategies
+
 ## Cleanup
 
 After you're finished with the demos, you can remove the databases with:
@@ -96,6 +117,7 @@ After you're finished with the demos, you can remove the databases with:
 dropdb ecommerce_optimization
 dropdb datawarehouse_optimization
 dropdb migration_validation
+dropdb timeseries_iot_demo
 ```
 
 ## Advanced Usage
@@ -106,4 +128,4 @@ To modify the data volume in these scripts:
 2. Reduce the upper bound to generate less data
 3. For example, change `FROM generate_series(1, 100000)` to `FROM generate_series(1, 10000)`
 
-This will create a smaller database that requires fewer resources but still demonstrates the key features. 
+This will create a smaller database that requires fewer resources but still demonstrates the key features.

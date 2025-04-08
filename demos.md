@@ -1489,11 +1489,11 @@ With these optimizations implemented, you should be able to handle the increased
 
 After completing this multi-step optimization process, you should achieve:
 
-- 80-95% reduction in query execution time for critical queries
-- 30-50% overall reduction in database load
-- Significantly improved buffer cache utilization
-- Confidence in the database's ability to handle peak traffic
-- Elimination of unused or redundant database objects
+- 80-95% reduction in query execution time for time-bounded queries
+- 80-90% reduction in storage requirements through compression
+- Automatic data lifecycle management without manual intervention
+- Near real-time analytics even as data volumes continue to grow
+- Ability to scale to billions of data points without degradation
 
 ## Advanced Demo 2: Data Warehouse Query Optimization
 
@@ -1926,6 +1926,221 @@ After completing this migration validation and optimization process:
 - Updated queries to leverage PostgreSQL-specific features
 - Performance equal to or better than the original MySQL database
 
+## Advanced Demo 4: Time-Series Data Management
+
+### Scenario
+You're a data engineer responsible for an IoT platform collecting sensor data from manufacturing facilities. The system ingests millions of readings daily from thousands of devices, and performance has been steadily declining as data volumes grow. Operations teams need real-time dashboards and alerting, while data science teams require efficient access to historical trends.
+
+### Multi-step Interaction Flow
+
+#### Step 1: Initial Assessment
+
+**User:** "Our IoT database collects temperature, humidity, and pressure readings from factory sensors every 5 minutes. Reports and dashboards are getting slower each month as we add more devices. How can we optimize this for both real-time monitoring and historical analysis?"
+
+**Assistant:**
+"I'll help you implement time-series specific optimizations for your IoT database. Let's first analyze your current database structure and query patterns."
+
+*The assistant runs:*
+```
+list_schemas
+list_objects in iot schema
+get_object_details for iot.sensor_data
+analyze_db_health
+```
+
+"I've analyzed your IoT database and identified several optimization opportunities:
+
+1. Your `sensor_data` table contains 143 million rows spanning 2 years with no partitioning
+2. Queries scanning more than a week of data take 45+ seconds to complete
+3. The database uses standard B-tree indexes, which aren't optimal for time-series access patterns
+4. You're storing raw data indefinitely, which isn't necessary for older historical analysis
+5. Most of your analytical queries aggregate data but still scan raw readings
+
+Let's implement a comprehensive time-series optimization strategy using TimescaleDB's specialized features."
+
+#### Step 2: Implementing TimescaleDB Hypertables
+
+**User:** "That sounds promising. What specific changes would you recommend to improve performance?"
+
+*The assistant runs:*
+```
+execute_sql to examine typical queries
+```
+
+"I recommend converting your main sensor_data table to a TimescaleDB hypertable with time-based partitioning. This will significantly improve query performance by enabling chunk exclusion, where queries only scan relevant time partitions."
+
+*The assistant provides SQL statements:*
+```sql
+-- First, install the TimescaleDB extension
+CREATE EXTENSION IF NOT EXISTS timescaledb;
+
+-- Convert the existing table to a hypertable
+SELECT create_hypertable('iot.sensor_data', 'time', 
+  chunk_time_interval => INTERVAL '1 day',
+  migrate_data => true);
+  
+-- Create an optimized index for time-series queries
+CREATE INDEX idx_sensor_data_time_device ON iot.sensor_data(device_id, time DESC);
+```
+
+"This change alone should provide a 10-50x speedup for time-bounded queries. The hypertable automatically partitions your data into chunks based on time, optimizing both insert and query performance."
+
+#### Step 3: Implementing Continuous Aggregates for Analytics
+
+**User:** "Our operations team needs to see hourly averages for the last 7 days and daily averages for the last 90 days. Would that require separate tables?"
+
+*The assistant analyzes query patterns further:*
+```
+explain_query with analyze for dashboard queries
+```
+
+"Instead of maintaining separate aggregate tables manually, I recommend implementing TimescaleDB's continuous aggregates. These are automatically refreshed materialized views that are specifically optimized for time-series aggregation."
+
+*The assistant provides implementation SQL:*
+```sql
+-- Create an hourly rollup view
+CREATE MATERIALIZED VIEW iot.hourly_metrics
+WITH (timescaledb.continuous) AS
+SELECT 
+  time_bucket('1 hour', time) AS bucket,
+  device_id,
+  AVG(temperature) AS avg_temp,
+  MIN(temperature) AS min_temp,
+  MAX(temperature) AS max_temp,
+  AVG(humidity) AS avg_humidity,
+  AVG(pressure) AS avg_pressure
+FROM iot.sensor_data
+GROUP BY bucket, device_id;
+
+-- Create a daily rollup view
+CREATE MATERIALIZED VIEW iot.daily_metrics
+WITH (timescaledb.continuous) AS
+SELECT 
+  time_bucket('1 day', time) AS bucket,
+  device_id,
+  AVG(temperature) AS avg_temp,
+  MIN(temperature) AS min_temp,
+  MAX(temperature) AS max_temp,
+  AVG(humidity) AS avg_humidity,
+  AVG(pressure) AS avg_pressure
+FROM iot.sensor_data
+GROUP BY bucket, device_id;
+
+-- Add automated refresh policies
+SELECT add_continuous_aggregate_policy('iot.hourly_metrics',
+  start_offset => INTERVAL '1 week',
+  end_offset => INTERVAL '1 hour',
+  schedule_interval => INTERVAL '1 hour');
+  
+SELECT add_continuous_aggregate_policy('iot.daily_metrics',
+  start_offset => INTERVAL '3 months',
+  end_offset => INTERVAL '1 day',
+  schedule_interval => INTERVAL '1 day');
+```
+
+"These continuous aggregates will dramatically improve dashboard performance. For example, a query that previously scanned millions of raw readings to calculate a daily average will now just retrieve pre-computed aggregates from these views."
+
+#### Step 4: Implementing Data Retention and Compression
+
+**User:** "We need to keep raw data for 90 days for troubleshooting, but after that, we only need aggregated data for trends. How do we manage that without manual purging?"
+
+*The assistant runs:*
+```
+get_object_details for iot.sensor_data to check current size
+analyze_db_health with health_type=storage
+```
+
+"I recommend implementing an automated data lifecycle policy with TimescaleDB. We can compress older data to reduce storage requirements and automatically drop data beyond your retention period."
+
+*The assistant provides SQL implementation:*
+```sql
+-- Compress chunks older than 7 days (reduces storage by ~70-90%)
+SELECT add_compression_policy('iot.sensor_data', INTERVAL '7 days');
+
+-- Automatically drop raw data older than 90 days
+-- (since we have continuous aggregates for historical analysis)
+SELECT add_retention_policy('iot.sensor_data', INTERVAL '90 days');
+```
+
+"With these policies:
+1. Data older than 7 days will be automatically compressed, reducing your storage needs by approximately 80%
+2. Raw sensor data older than 90 days will be automatically removed
+3. Your pre-computed aggregates in the continuous aggregate views will be retained indefinitely
+4. These processes happen automatically in the background
+
+This approach gives you the best of both worlds - detailed recent data for troubleshooting and aggregated historical data for trend analysis, all while optimizing storage costs."
+
+#### Step 5: Implementing Anomaly Detection
+
+**User:** "Our team currently runs a nightly job to detect sensor anomalies by calculating standard deviations, but it's getting very slow. Can we make this more efficient and possibly real-time?"
+
+*The assistant analyzes the current anomaly detection query:*
+```
+execute_sql to examine the current anomaly detection queries
+explain_query with analyze for anomaly detection
+```
+
+"Your current anomaly detection query is inefficient because it recalculates statistics across all historical data. Let's create a more efficient real-time approach using TimescaleDB's hyperfunctions."
+
+*The assistant provides the optimized implementation:*
+```sql
+-- Create a view that detects anomalies efficiently
+CREATE OR REPLACE VIEW iot.temperature_anomalies AS
+WITH device_stats AS (
+  -- Calculate per-device statistics using the daily aggregate
+  SELECT 
+    device_id,
+    AVG(avg_temp) as avg_temperature,
+    STDDEV(avg_temp) as stddev_temperature
+  FROM iot.daily_metrics
+  WHERE bucket >= NOW() - INTERVAL '30 days'
+  GROUP BY device_id
+),
+recent_data AS (
+  -- Use the hourly aggregate for recent data instead of raw readings
+  SELECT 
+    s.bucket as time,
+    s.device_id,
+    s.avg_temp as temperature,
+    ds.avg_temperature,
+    ds.stddev_temperature,
+    (s.avg_temp - ds.avg_temperature) / NULLIF(ds.stddev_temperature, 0) as z_score
+  FROM iot.hourly_metrics s
+  JOIN device_stats ds ON s.device_id = ds.device_id
+  WHERE s.bucket >= NOW() - INTERVAL '24 hours'
+)
+SELECT 
+  rd.device_id,
+  d.device_name,
+  l.location_name,
+  rd.time,
+  rd.temperature,
+  rd.avg_temperature as baseline_avg,
+  rd.stddev_temperature as baseline_stddev,
+  rd.z_score
+FROM recent_data rd
+JOIN iot.devices d ON rd.device_id = d.device_id
+JOIN iot.locations l ON d.location_id = l.location_id
+WHERE ABS(rd.z_score) > 3.0  -- 3 standard deviations
+ORDER BY ABS(rd.z_score) DESC;
+```
+
+"This approach provides several advantages:
+1. Anomaly detection now completes in milliseconds instead of minutes
+2. It uses pre-aggregated data instead of scanning raw readings
+3. The baseline statistics are calculated from a relevant historical window
+4. The view can be queried in real-time for dashboard alerts
+
+Since this uses your continuous aggregates, the anomaly detection automatically accounts for new data as it's collected."
+
+### Expected Results
+
+After implementing these time-series optimizations, you should achieve:
+- 10-50x faster query performance for time-bounded queries
+- 80-90% reduction in storage requirements through compression
+- Automatic data lifecycle management without manual intervention
+- Near real-time analytics even as data volumes continue to grow
+- Ability to scale to billions of data points without degradation
 
 ## Cleanup After Demos
 
