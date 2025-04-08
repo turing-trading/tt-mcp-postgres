@@ -10,6 +10,8 @@ Before running these demos, ensure you have:
 2. A PostgreSQL database (sample databases provided below)
 3. An MCP-compatible AI assistant configured to use Postgres Pro
 
+⚠️ **Resource Requirements**: Some demos create millions of rows and may require significant disk space (up to several GB) and memory. Adjust the `generate_series()` parameters in the scripts if needed to reduce resource usage.
+
 ## Demo 1: Database Health Assessment
 
 ### Scenario
@@ -158,6 +160,187 @@ Users are reporting that your application is running slow. You suspect database 
 3. Identifies missing indexes or optimization opportunities
 4. Recommends specific indexes to improve performance
 5. Provides estimates of performance improvements for each recommendation
+
+### Practical Implementation
+
+#### Step 1: Create test database with performance issues
+
+```bash
+# Create a test database
+createdb slow_app_demo
+
+# Connect to the database
+psql slow_app_demo
+```
+
+```sql
+-- Create sample tables for a reporting application
+CREATE TABLE customers (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(100),
+  email VARCHAR(100),
+  signup_date DATE,
+  last_login TIMESTAMP,
+  account_type VARCHAR(20)
+);
+
+CREATE TABLE reports (
+  id SERIAL PRIMARY KEY,
+  title VARCHAR(200),
+  description TEXT,
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW(),
+  creator_id INTEGER REFERENCES customers(id),
+  is_public BOOLEAN DEFAULT false
+);
+
+CREATE TABLE report_views (
+  id SERIAL PRIMARY KEY,
+  report_id INTEGER REFERENCES reports(id),
+  viewer_id INTEGER REFERENCES customers(id),
+  viewed_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE report_data (
+  id SERIAL PRIMARY KEY,
+  report_id INTEGER REFERENCES reports(id),
+  data_point VARCHAR(100),
+  value NUMERIC(12,2),
+  entry_date DATE
+);
+
+-- Insert sample data
+INSERT INTO customers (name, email, signup_date, last_login, account_type)
+SELECT 
+  'Customer ' || i,
+  'customer' || i || '@example.com',
+  CURRENT_DATE - (random() * 365 * 2)::integer,
+  NOW() - (random() * 30)::integer * INTERVAL '1 hour',
+  (ARRAY['free', 'basic', 'premium', 'enterprise'])[1 + (i % 4)]
+FROM generate_series(1, 10000) i;
+
+INSERT INTO reports (title, description, created_at, creator_id, is_public)
+SELECT 
+  'Report ' || i,
+  'Description for report ' || i,
+  NOW() - (random() * 180)::integer * INTERVAL '1 day',
+  (random() * 10000)::integer + 1,
+  random() > 0.7
+FROM generate_series(1, 5000) i;
+
+INSERT INTO report_views (report_id, viewer_id, viewed_at)
+SELECT 
+  (random() * 5000)::integer + 1,
+  (random() * 10000)::integer + 1,
+  NOW() - (random() * 90)::integer * INTERVAL '1 day'
+FROM generate_series(1, 100000) i;
+
+INSERT INTO report_data (report_id, data_point, value, entry_date)
+SELECT 
+  (random() * 5000)::integer + 1,
+  'Metric ' || (i % 20),
+  random() * 1000,
+  CURRENT_DATE - (random() * 365)::integer
+FROM generate_series(1, 500000) i;
+
+-- Create basic but insufficient indexes
+CREATE INDEX idx_customers_name ON customers(name);
+CREATE INDEX idx_reports_creator ON reports(creator_id);
+```
+
+#### Step 2: Create slow dashboard queries
+
+```sql
+-- Create some slow queries that run periodically in the dashboard
+-- This simulates the application's main performance issues
+
+-- 1. Popular reports query with no efficient indexes
+CREATE OR REPLACE FUNCTION get_popular_reports() RETURNS void AS $$
+BEGIN
+  PERFORM r.id, r.title, COUNT(rv.id) as view_count
+  FROM reports r
+  JOIN report_views rv ON r.id = rv.report_id
+  WHERE r.is_public = true
+  GROUP BY r.id, r.title
+  ORDER BY view_count DESC
+  LIMIT 20;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 2. User activity tracking with poor performance
+CREATE OR REPLACE FUNCTION track_user_activity() RETURNS void AS $$
+BEGIN
+  PERFORM c.id, c.name, c.email, MAX(rv.viewed_at) as last_activity
+  FROM customers c
+  LEFT JOIN report_views rv ON c.id = rv.viewer_id
+  WHERE c.account_type = 'premium' OR c.account_type = 'enterprise'
+  GROUP BY c.id, c.name, c.email
+  ORDER BY last_activity DESC NULLS LAST;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 3. Report data aggregation that's slow
+CREATE OR REPLACE FUNCTION aggregate_report_data() RETURNS void AS $$
+BEGIN
+  PERFORM rd.report_id, r.title, rd.data_point, 
+         AVG(rd.value) as avg_value, 
+         MIN(rd.value) as min_value,
+         MAX(rd.value) as max_value
+  FROM report_data rd
+  JOIN reports r ON rd.report_id = r.id
+  WHERE rd.entry_date >= CURRENT_DATE - INTERVAL '30 days'
+  GROUP BY rd.report_id, r.title, rd.data_point
+  ORDER BY rd.report_id, rd.data_point;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Generate load by calling these functions
+DO $$
+BEGIN
+  FOR i IN 1..20 LOOP
+    PERFORM get_popular_reports();
+    PERFORM track_user_activity();
+    PERFORM aggregate_report_data();
+  END LOOP;
+END $$;
+```
+
+#### Step 3: Install required extensions
+
+```sql
+-- Install required extensions
+CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+```
+
+#### Step 4: Connect to the database with Postgres Pro MCP
+
+Configure your AI assistant to connect to the slow_app_demo database.
+
+#### Step 5: Ask for query analysis and index recommendations
+
+**User:** "My application is slow, especially when users access the reporting dashboard. Can you help me figure out what's wrong and how to fix it?"
+
+#### Step 6: Implement the recommended indexes
+
+After receiving the index recommendations, implement them and verify performance improvements:
+
+```sql
+-- Examples of indexes that might be recommended:
+CREATE INDEX idx_reports_is_public ON reports(is_public);
+CREATE INDEX idx_report_views_report_id ON report_views(report_id);
+CREATE INDEX idx_report_data_entry_date ON report_data(entry_date);
+CREATE INDEX idx_customers_account_type ON customers(account_type);
+
+-- Test the queries again to verify improvement
+DO $$
+BEGIN
+  FOR i IN 1..5 LOOP
+    PERFORM get_popular_reports();
+    PERFORM track_user_activity();
+    PERFORM aggregate_report_data();
+  END LOOP;
+END $$;
+```
 
 ### Expected Results
 
@@ -350,6 +533,184 @@ You're working with a new database and need to understand its structure, relatio
 4. Identifies primary keys, foreign keys, and indexing strategies
 5. Creates a comprehensive overview of the database structure
 
+### Practical Implementation
+
+#### Step 1: Set up a sample database with complex schema
+
+```bash
+# Create a test database
+createdb schema_discovery_demo
+
+# Connect to the database
+psql schema_discovery_demo
+```
+
+```sql
+-- Create multiple schemas to simulate a real-world complex application
+CREATE SCHEMA auth;
+CREATE SCHEMA public;
+CREATE SCHEMA analytics;
+CREATE SCHEMA archive;
+
+-- Auth schema objects
+CREATE TABLE auth.users (
+  id SERIAL PRIMARY KEY,
+  username VARCHAR(50) UNIQUE NOT NULL,
+  email VARCHAR(100) UNIQUE NOT NULL,
+  password_hash VARCHAR(100) NOT NULL,
+  created_at TIMESTAMP DEFAULT NOW(),
+  last_login TIMESTAMP,
+  is_active BOOLEAN DEFAULT true
+);
+
+CREATE TABLE auth.roles (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(50) UNIQUE NOT NULL,
+  description TEXT
+);
+
+CREATE TABLE auth.user_roles (
+  user_id INTEGER REFERENCES auth.users(id),
+  role_id INTEGER REFERENCES auth.roles(id),
+  assigned_at TIMESTAMP DEFAULT NOW(),
+  PRIMARY KEY (user_id, role_id)
+);
+
+CREATE TABLE auth.permissions (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(100) UNIQUE NOT NULL,
+  description TEXT
+);
+
+CREATE TABLE auth.role_permissions (
+  role_id INTEGER REFERENCES auth.roles(id),
+  permission_id INTEGER REFERENCES auth.permissions(id),
+  PRIMARY KEY (role_id, permission_id)
+);
+
+-- Public schema (application data)
+CREATE TABLE public.products (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(100) NOT NULL,
+  description TEXT,
+  price NUMERIC(10,2) NOT NULL,
+  inventory INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE public.categories (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(50) NOT NULL,
+  parent_id INTEGER REFERENCES public.categories(id)
+);
+
+CREATE TABLE public.product_categories (
+  product_id INTEGER REFERENCES public.products(id),
+  category_id INTEGER REFERENCES public.categories(id),
+  PRIMARY KEY (product_id, category_id)
+);
+
+CREATE TABLE public.orders (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER REFERENCES auth.users(id),
+  status VARCHAR(20) NOT NULL,
+  total_amount NUMERIC(12,2) NOT NULL,
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE public.order_items (
+  id SERIAL PRIMARY KEY,
+  order_id INTEGER REFERENCES public.orders(id),
+  product_id INTEGER REFERENCES public.products(id),
+  quantity INTEGER NOT NULL,
+  unit_price NUMERIC(10,2) NOT NULL
+);
+
+-- Analytics schema
+CREATE TABLE analytics.page_views (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER REFERENCES auth.users(id),
+  page_url VARCHAR(200) NOT NULL,
+  viewed_at TIMESTAMP DEFAULT NOW(),
+  session_id VARCHAR(100),
+  user_agent TEXT
+);
+
+CREATE TABLE analytics.product_views (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER REFERENCES auth.users(id),
+  product_id INTEGER REFERENCES public.products(id),
+  viewed_at TIMESTAMP DEFAULT NOW(),
+  session_id VARCHAR(100)
+);
+
+-- Archive schema
+CREATE TABLE archive.old_orders (
+  id INTEGER,
+  user_id INTEGER,
+  status VARCHAR(20),
+  total_amount NUMERIC(12,2),
+  created_at TIMESTAMP,
+  archived_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Create views
+CREATE VIEW public.active_products AS
+  SELECT * FROM public.products WHERE inventory > 0;
+
+CREATE VIEW public.order_summary AS
+  SELECT o.id, o.user_id, u.username, o.total_amount, o.created_at
+  FROM public.orders o
+  JOIN auth.users u ON o.user_id = u.id;
+
+-- Create a stored procedure
+CREATE OR REPLACE PROCEDURE public.create_order(
+  p_user_id INTEGER,
+  p_status VARCHAR(20),
+  p_total_amount NUMERIC(12,2)
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  INSERT INTO public.orders (user_id, status, total_amount)
+  VALUES (p_user_id, p_status, p_total_amount);
+END;
+$$;
+
+-- Insert some sample data
+INSERT INTO auth.roles (name, description) VALUES
+  ('admin', 'Administrator with full access'),
+  ('manager', 'Can manage products and view orders'),
+  ('customer', 'Regular customer');
+
+INSERT INTO auth.permissions (name, description) VALUES
+  ('view_products', 'Can view products'),
+  ('edit_products', 'Can edit products'),
+  ('view_orders', 'Can view orders'),
+  ('create_orders', 'Can create orders'),
+  ('manage_users', 'Can manage users');
+
+INSERT INTO auth.users (username, email, password_hash) VALUES
+  ('admin', 'admin@example.com', 'hashed_password'),
+  ('manager1', 'manager1@example.com', 'hashed_password'),
+  ('customer1', 'customer1@example.com', 'hashed_password');
+
+-- Create some indexes
+CREATE INDEX idx_products_name ON public.products(name);
+CREATE INDEX idx_orders_user_id ON public.orders(user_id);
+CREATE INDEX idx_page_views_user_id ON analytics.page_views(user_id);
+```
+
+#### Step 2: Connect to the database with Postgres Pro MCP
+
+Configure your AI assistant to connect to the schema_discovery_demo database.
+
+#### Step 3: Explore the database schema
+
+**User:** "I'm new to this database. Can you help me understand its structure and how the tables are related?"
+
 ### Expected Results
 
 The assistant should provide:
@@ -375,6 +736,194 @@ Your database is growing rapidly and you're concerned about storage usage.
 3. Finds unused indexes that can be safely removed
 4. Recommends partitioning strategies for large tables
 5. Suggests VACUUM and maintenance strategies
+
+### Practical Implementation
+
+#### Step 1: Create a database with storage issues
+
+```bash
+# Create a test database
+createdb storage_optimization_demo
+
+# Connect to the database
+psql storage_optimization_demo
+```
+
+```sql
+-- Enable extensions
+CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+
+-- Create sample tables with storage issues
+CREATE TABLE customer_data (
+  id SERIAL PRIMARY KEY,
+  first_name VARCHAR(50),
+  last_name VARCHAR(50),
+  email VARCHAR(100),
+  full_address TEXT,
+  phone VARCHAR(20),
+  notes TEXT,
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE transactions (
+  id SERIAL PRIMARY KEY,
+  customer_id INTEGER REFERENCES customer_data(id),
+  amount NUMERIC(12,2),
+  transaction_date TIMESTAMP DEFAULT NOW(),
+  status VARCHAR(20),
+  details TEXT
+);
+
+CREATE TABLE transaction_history (
+  id SERIAL PRIMARY KEY,
+  transaction_id INTEGER REFERENCES transactions(id),
+  status VARCHAR(20),
+  changed_at TIMESTAMP DEFAULT NOW(),
+  changed_by VARCHAR(50)
+);
+
+CREATE TABLE logs (
+  id SERIAL PRIMARY KEY,
+  log_time TIMESTAMP DEFAULT NOW(),
+  source VARCHAR(50),
+  message TEXT,
+  level VARCHAR(10)
+);
+
+-- Insert sample data
+-- Add customers with large notes fields
+INSERT INTO customer_data (first_name, last_name, email, full_address, phone, notes)
+SELECT 
+  'FirstName' || i,
+  'LastName' || i,
+  'customer' || i || '@example.com',
+  'Full Address for customer ' || i || ', with city, state and ZIP code information included here for completeness',
+  '555-' || lpad(i::text, 7, '0'),
+  repeat('This is a sample note with lots of redundant information that takes up space. ', 10)
+FROM generate_series(1, 100000) i;
+
+-- Add transactions
+INSERT INTO transactions (customer_id, amount, transaction_date, status, details)
+SELECT 
+  (random() * 100000)::integer + 1,
+  (random() * 1000)::numeric(12,2),
+  NOW() - (random() * 365 * 3)::integer * INTERVAL '1 day',
+  (ARRAY['pending', 'completed', 'failed', 'refunded'])[1 + (i % 4)],
+  repeat('Transaction details with verbose description that is mostly redundant. ', 5)
+FROM generate_series(1, 500000) i;
+
+-- Add transaction history (creating a lot of history for some transactions)
+INSERT INTO transaction_history (transaction_id, status, changed_at, changed_by)
+SELECT 
+  (i % 100000) + 1,
+  (ARRAY['created', 'pending', 'processing', 'completed', 'failed', 'refunded'])[1 + (i % 6)],
+  NOW() - (random() * 365)::integer * INTERVAL '1 day',
+  'User' || (random() * 100)::integer
+FROM generate_series(1, 1000000) i;
+
+-- Add log entries (many will be redundant)
+INSERT INTO logs (log_time, source, message, level)
+SELECT 
+  NOW() - (random() * 90)::integer * INTERVAL '1 day',
+  (ARRAY['app', 'database', 'system', 'network'])[1 + (i % 4)],
+  CASE i % 10
+    WHEN 0 THEN 'User login attempt'
+    WHEN 1 THEN 'Transaction processed'
+    WHEN 2 THEN 'Database connection established'
+    WHEN 3 THEN 'Cache miss'
+    WHEN 4 THEN 'API request received'
+    ELSE 'Generic log message with additional text to take up space: ' || i::text
+  END,
+  (ARRAY['INFO', 'WARNING', 'ERROR', 'DEBUG'])[1 + (i % 4)]
+FROM generate_series(1, 2000000) i;
+
+-- Create excessive indexes
+CREATE INDEX idx_customer_first_name ON customer_data(first_name);
+CREATE INDEX idx_customer_last_name ON customer_data(last_name);
+CREATE INDEX idx_customer_full_name ON customer_data(first_name, last_name); -- Redundant
+CREATE INDEX idx_customer_email ON customer_data(email);
+CREATE INDEX idx_customer_email_lower ON customer_data(lower(email)); -- Mostly redundant
+
+CREATE INDEX idx_transactions_customer_id ON transactions(customer_id);
+CREATE INDEX idx_transactions_date ON transactions(transaction_date);
+CREATE INDEX idx_transactions_amount ON transactions(amount);
+CREATE INDEX idx_transactions_status ON transactions(status);
+CREATE INDEX idx_transactions_cust_date ON transactions(customer_id, transaction_date); -- Partially redundant
+
+CREATE INDEX idx_logs_time ON logs(log_time);
+CREATE INDEX idx_logs_source ON logs(source);
+CREATE INDEX idx_logs_level ON logs(level);
+CREATE INDEX idx_logs_source_level ON logs(source, level); -- Could be redundant
+
+-- Create bloated table through updates
+DO $$
+BEGIN
+  FOR i IN 1..50 LOOP
+    UPDATE customer_data 
+    SET notes = notes || ' Additional note added in update ' || i || '. '
+    WHERE id % 100 = i % 100;
+  END LOOP;
+END $$;
+
+DO $$
+BEGIN
+  FOR i IN 1..20 LOOP
+    UPDATE transactions 
+    SET details = details || ' Updated details for transaction. '
+    WHERE id % 50 = i % 50;
+  END LOOP;
+END $$;
+```
+
+#### Step 2: Connect to the database with Postgres Pro MCP
+
+Configure your AI assistant to connect to the storage_optimization_demo database.
+
+#### Step 3: Ask for storage optimization suggestions
+
+**User:** "My database is growing too large. Can you help me identify what's taking up space and how I can optimize storage?"
+
+#### Step 4: Implement the recommended optimizations
+
+After receiving the optimization recommendations, implement them:
+
+```sql
+-- Examples of optimizations that might be recommended:
+
+-- Remove redundant indexes
+DROP INDEX idx_customer_full_name;
+DROP INDEX idx_customer_email_lower;
+DROP INDEX idx_transactions_cust_date;
+DROP INDEX idx_logs_source_level;
+
+-- Fix bloated tables
+VACUUM FULL customer_data;
+VACUUM FULL transactions;
+
+-- Add table partitioning for logs
+CREATE TABLE logs_partitioned (
+  id SERIAL,
+  log_time TIMESTAMP DEFAULT NOW(),
+  source VARCHAR(50),
+  message TEXT,
+  level VARCHAR(10)
+) PARTITION BY RANGE (log_time);
+
+-- Create monthly partitions
+CREATE TABLE logs_y2023m01 PARTITION OF logs_partitioned
+  FOR VALUES FROM ('2023-01-01') TO ('2023-02-01');
+CREATE TABLE logs_y2023m02 PARTITION OF logs_partitioned
+  FOR VALUES FROM ('2023-02-01') TO ('2023-03-01');
+-- Add more partitions as needed
+
+-- Create retention policy function
+CREATE OR REPLACE FUNCTION delete_old_logs() RETURNS void AS $$
+BEGIN
+  DELETE FROM logs WHERE log_time < NOW() - INTERVAL '90 days';
+END;
+$$ LANGUAGE plpgsql;
+```
 
 ### Expected Results
 
@@ -700,11 +1249,46 @@ To run these demos effectively, you can use these sample databases:
 2. **Create some issues**: Deliberately create some issues (like missing indexes) to demonstrate problem detection
 3. **Use real-world queries**: Use realistic queries that demonstrate complex relationships and calculations
 4. **Prepare failure cases**: Show how the system handles errors and edge cases
-5. **Demonstrate progressive optimization**: Show how incremental improvements can significantly boost performance 
+5. **Demonstrate progressive optimization**: Show how incremental improvements can significantly boost performance
 
 ## Advanced Multi-Step Demo Scenarios
 
-The following scenarios demonstrate more comprehensive, real-world uses of Postgres Pro MCP that involve multiple interactions and progressive problem-solving approaches.
+### Setup Prerequisites
+
+To run the advanced multi-step demo scenarios (Advanced Demos 1-3), you'll need:
+
+1. A more powerful PostgreSQL instance (at least 4GB RAM recommended)
+2. The following extensions installed:
+   - pg_stat_statements
+   - hypopg
+   - pg_trgm (for text search demonstrations)
+
+For each advanced demo, create a database with the following prefixes:
+- Advanced Demo 1: `ecommerce_optimization`
+- Advanced Demo 2: `datawarehouse_optimization`
+- Advanced Demo 3: `migration_validation`
+
+The setup scripts for these advanced demos are significantly larger and would be best run from script files. The example commands below reference script files that you'll need to create based on the demo descriptions or download from the repository:
+
+```bash
+# Example for setting up the E-commerce Performance Optimization demo
+createdb ecommerce_optimization
+psql ecommerce_optimization -f demo_scripts/advanced_demo1_setup.sql
+
+# Example for setting up the Data Warehouse Optimization demo
+createdb datawarehouse_optimization
+psql datawarehouse_optimization -f demo_scripts/advanced_demo2_setup.sql
+
+# Example for setting up the Migration Validation demo
+# (This would typically involve a MySQL to PostgreSQL migration process)
+# The script below just sets up the PostgreSQL side for demonstration
+createdb migration_validation
+psql migration_validation -f demo_scripts/advanced_demo3_setup.sql
+```
+
+⚠️ **Resource Warning**: These advanced demos involve large datasets and complex operations. Ensure your system has adequate resources (8GB+ RAM and 10GB+ free disk space recommended) before attempting to run them.
+
+Note: For the Migration Validation demo (Advanced Demo 3), in a real-world scenario, you would be working with a database that was actually migrated from MySQL to PostgreSQL. The setup script creates a simulated post-migration PostgreSQL database that exhibits typical issues seen after migrations.
 
 ## Advanced Demo 1: E-commerce Performance Optimization Journey
 
@@ -1341,3 +1925,24 @@ After completing this migration validation and optimization process:
 - Configured server parameters for your specific workload
 - Updated queries to leverage PostgreSQL-specific features
 - Performance equal to or better than the original MySQL database
+
+
+## Cleanup After Demos
+
+After running the demos, you may want to clean up your system to free resources:
+
+```bash
+# List all test databases
+psql -c "\l" | grep demo
+
+# Drop each test database
+dropdb health_demo
+dropdb slow_app_demo
+dropdb query_demo
+dropdb schema_discovery_demo
+dropdb storage_optimization_demo
+dropdb workload_demo
+dropdb ecommerce_optimization
+dropdb datawarehouse_optimization
+dropdb migration_validation
+```
