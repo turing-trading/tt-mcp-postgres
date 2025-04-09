@@ -1,6 +1,83 @@
-# Postgres Pro MCP Server
+# Postgres Pro: Database Optimization Superpowers for AI Agents
 
-[ [Quick Start](#quick-start) | [Discord Server](https://discord.gg/4BEHC7ZM) ]
+> "What if your AI agent could manage PostgreSQL like a senior DBA?"
+
+[![Discord](https://img.shields.io/discord/1234567890?label=Discord&logo=discord&style=flat-square)](https://discord.gg/4BEHC7ZM)
+[![GitHub Stars](https://img.shields.io/github/stars/crystaldba/postgres-mcp?style=flat-square)](https://github.com/crystaldba/postgres-mcp/stargazers)
+[![License](https://img.shields.io/github/license/crystaldba/postgres-mcp?style=flat-square)](https://github.com/crystaldba/postgres-mcp/blob/main/LICENSE)
+
+**The Problem:** AI agents can write SQL but struggle with database optimization. Your application slows down as data grows, and most MCP servers just provide basic database access without solving performance issues.
+
+**The Solution:** Postgres Pro combines AI agent capabilities with industrial-strength optimization algorithms used by commercial databases. It supports you throughout the entire development lifecycle—from initial coding to production tuning.
+
+## How It's Different
+
+| Regular MCP Servers | Postgres Pro |
+|---------------------|-------------|
+| ❌ Just wrap database connections | ✅ Provides optimization intelligence |
+| ❌ Require humans to identify performance issues | ✅ Automatically finds slow queries |
+| ❌ No help with index selection | ✅ Uses advanced algorithms to suggest optimal indexes |
+| ❌ Can't simulate changes before applying | ✅ Shows exactly how performance would improve |
+| ❌ Same capabilities as a raw psql connection | ✅ Adds DBA expertise to every connection |
+
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/24e05745-65e9-4998-b877-a368f1eadc13" width="600">
+</p>
+
+## ✨ Features
+
+<table>
+  <tr>
+    <td width="50%">
+      <h3>🔍 Database Health</h3>
+      <ul>
+        <li>Detect unused/duplicate indexes</li>
+        <li>Monitor cache hit rates</li>
+        <li>Check connection utilization</li>
+        <li>Identify vacuum needs before problems occur</li>
+      </ul>
+    </td>
+    <td width="50%">
+      <h3>⚡ Index Tuning</h3>
+      <ul>
+        <li>Generate optimal indexes using proven algorithms</li>
+        <li>Validate AI-suggested indexes</li>
+        <li>Simulate performance impacts with hypothetical indexes</li>
+        <li>Balance performance gain vs storage costs</li>
+      </ul>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%">
+      <h3>📊 Schema Intelligence</h3>
+      <ul>
+        <li>Detailed schema information for tables, views & more</li>
+        <li>Context-aware SQL generation</li>
+        <li>Optimal column selection recommendations</li>
+      </ul>
+    </td>
+    <td width="50%">
+      <h3>🔒 Protected Execution</h3>
+      <ul>
+        <li><b>Unrestricted Mode:</b> Full read/write for development</li>
+        <li><b>Restricted Mode:</b> Read-only with resource limits for production</li>
+        <li>Safe SQL parsing to prevent security issues</li>
+      </ul>
+    </td>
+  </tr>
+</table>
+
+## 💥 Why This Matters
+
+When databases get slow, the usual culprit is missing indexes. But finding the right indexes isn't trivial:
+
+- Too few indexes: Queries slow to a crawl
+- Wrong indexes: Minimal performance benefit with storage cost
+- Too many indexes: Slower writes, wasted space, increased maintenance
+
+Postgres Pro applies decades of academic research to solve these problems automatically.
+
+[ [Quick Start](#quick-start) | [Demo Video](#demo) | [Technical Deep Dive](#technical-notes) ]
 
 ## Overview
 
@@ -27,23 +104,28 @@ Postgres Pro also provides comprehensive schema information to support SQL gener
 - [Technical Notes](#technical-notes)
 - [Postgres Pro Development](#postgres-pro-development)
 
-## Demo
+## Demo: From Unusable to Lightning Fast
 
-Here is a demo of using Postgres Pro in Cursor to optimize and fix an AI-generated app.
-We initially generated the app using Replit, but the SQLAlchemy code it wrote ran very slowly, making the application practically unusable.
+<p align="center">
+  <b>Challenge:</b> We generated a movie app using an AI assistant, but it was painfully slow<br>
+  <b>Solution:</b> Using Postgres Pro with Cursor AI, we fixed performance issues in minutes
+</p>
 
-**We used the Cursor AI agent and Postgres Pro to:**
-- Fix performance - including ORM queries, indexing, and caching
-- Fix bugs that require connecting data to code
-- Add new features from single prompts
+### Watch how we:
+- 🚀 Sped up queries by 500x with automatic index recommendations
+- 🛠️ Fixed ORM query anti-patterns causing database overload
+- 🔍 Identified and resolved N+1 query problems
+- 🧠 Added caching in the right places to minimize database load
 
-**Two ways to see demo**
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/24e05745-65e9-4998-b877-a368f1eadc13">
+    <img src="https://github.com/user-attachments/assets/24e05745-65e9-4998-b877-a368f1eadc13" width="600" alt="Demo Video">
+  </a>
+</p>
 
-- [Read the play-by-play](examples/movie-app.md)
-- Watch video below
-
-https://github.com/user-attachments/assets/24e05745-65e9-4998-b877-a368f1eadc13
-
+<p align="center">
+  <a href="examples/movie-app.md"><strong>📄 Read the step-by-step guide</strong></a>
+</p>
 
 ## Features
 
