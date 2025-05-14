@@ -134,12 +134,15 @@ You will now edit the `mcpServers` section of the configuration file.
       "args": [
         "bash",
         "-c",
-        "/home/mark/.local/bin/uvx --from git+https://github.com/crystaldba/postgres-mcp@main postgres-mcp postgresql://username:password@localhost:5432/dbname --access-mode=unrestricted"
+        "/home/$WSL_USER/.local/bin/uvx --from git+https://github.com/crystaldba/postgres-mcp@main postgres-mcp postgresql://username:password@localhost:5432/dbname --access-mode=unrestricted"
       ]
     }
   }
 }
 ```
+_Replace `$WSL_USER` with your WSL username_
+_If you do not know where uvx is installed, run `which uvx` in WSL_
+_If you do not have uvx installed, see section above for instructions_
 
 ##### If you are using Docker
 
